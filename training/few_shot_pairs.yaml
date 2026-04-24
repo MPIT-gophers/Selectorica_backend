@@ -1,0 +1,100 @@
+version: 1
+pairs:
+  - id: fs_001
+    question_ru: "Покажи выручку по дням за последние 7 дней."
+    sql: |
+      SELECT
+          date_trunc('day', order_timestamp) AS order_date,
+          SUM(CASE WHEN status_order = 'done' THEN COALESCE(price_order_local, 0) ELSE 0 END) AS revenue_local
+      FROM orders
+      WHERE order_timestamp >= NOW() - INTERVAL '7 days'
+      GROUP BY 1
+      ORDER BY 1;
+    notes: "Базовая дневная агрегация выручки."
+
+  - id: fs_002
+    question_ru: "Сколько отмен было по городам за вчера?"
+    sql: |
+      SELECT
+          city_id,
+          COUNT(*) FILTER (WHERE status_order = 'cancel') AS cancelled_orders
+      FROM orders
+      WHERE date_trunc('day', order_timestamp) = date_trunc('day', NOW() - INTERVAL '1 day')
+      GROUP BY 1
+      ORDER BY 2 DESC;
+    notes: "Агрегация отмен по разрезу city_id."
+
+  - id: fs_003
+    question_ru: "Покажи количество завершенных поездок по каналам за последние 30 дней."
+    sql: |
+      SELECT
+          status_tender AS channel,
+          COUNT(*) FILTER (WHERE status_order = 'done') AS completed_trips
+      FROM orders
+      WHERE order_timestamp >= NOW() - INTERVAL '30 days'
+      GROUP BY 1
+      ORDER BY 2 DESC;
+    notes: "Разрез channel реализован через status_tender."
+
+  - id: fs_004
+    question_ru: "Какая выручка по городам за текущий месяц?"
+    sql: |
+      SELECT
+          city_id,
+          SUM(CASE WHEN status_order = 'done' THEN COALESCE(price_order_local, 0) ELSE 0 END) AS revenue_local
+      FROM orders
+      WHERE date_trunc('month', order_timestamp) = date_trunc('month', NOW())
+      GROUP BY 1
+      ORDER BY 2 DESC;
+    notes: "Месячная агрегация выручки по городам."
+
+  - id: fs_005
+    question_ru: "Покажи топ-5 дней по количеству завершенных поездок."
+    sql: |
+      SELECT
+          date_trunc('day', order_timestamp) AS order_date,
+          COUNT(*) FILTER (WHERE status_order = 'done') AS completed_trips
+      FROM orders
+      GROUP BY 1
+      ORDER BY 2 DESC
+      LIMIT 5;
+    notes: "Топ дней по completed_trips."
+
+  - id: fs_006
+    question_ru: "Сколько отмен и завершенных поездок было по каналам за последние 14 дней?"
+    sql: |
+      SELECT
+          status_tender AS channel,
+          COUNT(*) FILTER (WHERE status_order = 'cancel') AS cancelled_orders,
+          COUNT(*) FILTER (WHERE status_order = 'done') AS completed_trips
+      FROM orders
+      WHERE order_timestamp >= NOW() - INTERVAL '14 days'
+      GROUP BY 1
+      ORDER BY 2 DESC, 3 DESC;
+    notes: "Две метрики в одном запросе по channel."
+
+  - id: fs_007
+    question_ru: "Покажи ежедневную выручку и количество отмен за последние 10 дней."
+    sql: |
+      SELECT
+          date_trunc('day', order_timestamp) AS order_date,
+          SUM(CASE WHEN status_order = 'done' THEN COALESCE(price_order_local, 0) ELSE 0 END) AS revenue_local,
+          COUNT(*) FILTER (WHERE status_order = 'cancel') AS cancelled_orders
+      FROM orders
+      WHERE order_timestamp >= NOW() - INTERVAL '10 days'
+      GROUP BY 1
+      ORDER BY 1;
+    notes: "Комбинированный time-series запрос."
+
+  - id: fs_008
+    question_ru: "Какие 10 городов дали максимальную выручку за последние 90 дней?"
+    sql: |
+      SELECT
+          city_id,
+          SUM(CASE WHEN status_order = 'done' THEN COALESCE(price_order_local, 0) ELSE 0 END) AS revenue_local
+      FROM orders
+      WHERE order_timestamp >= NOW() - INTERVAL '90 days'
+      GROUP BY 1
+      ORDER BY 2 DESC
+      LIMIT 10;
+    notes: "Топ городов по выручке."

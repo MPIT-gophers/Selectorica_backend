@@ -1,0 +1,14 @@
+vanna
+sqlglot
+mcp
+fastmcp
+asyncpg
+psycopg2-binary
+pandas
+sqlalchemy
+fastapi
+uvicorn
+dotml
+pyyaml
+pg8000
+openai

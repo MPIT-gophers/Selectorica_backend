@@ -1,0 +1,14 @@
+version: 1
+dimensions:
+  - name: city_id
+    description: Идентификатор города.
+    type: number
+    sql: "${table}.city_id"
+  - name: channel
+    description: Канал в MVP представлен полем статуса тендера.
+    type: string
+    sql: "${table}.status_tender"
+  - name: order_date
+    description: Дата заказа с дневной гранулярностью.
+    type: time
+    sql: "date_trunc('day', ${table}.order_timestamp)"
