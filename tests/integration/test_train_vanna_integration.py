@@ -9,7 +9,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TMP_ROOT = REPO_ROOT / ".tmp_test"
 
-from backend.scripts.train_vanna import RunConfig, run_pipeline
+from backend.app.infrastructure.training.train_vanna_pipeline import RunConfig, run_pipeline
 
 
 @unittest.skipUnless(

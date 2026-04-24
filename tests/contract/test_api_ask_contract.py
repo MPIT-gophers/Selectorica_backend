@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 from fastapi.testclient import TestClient
 
-from backend.scripts.api_server import create_app, get_ask_service
 from backend.app.application.services.ask_service import AskResult, AskServiceError
+from backend.app.interfaces.http.server import create_app, get_ask_service
 
 
 @dataclass
@@ -16,6 +16,7 @@ class ContractStubAskService:
     """Заглушка сервиса для проверки внешнего HTTP-контракта."""
 
     mode: str = "ok"
+    error_code: str = "SQL_EXECUTION_FAILED"
 
     def ask(
         self,
@@ -24,9 +25,8 @@ class ContractStubAskService:
     ) -> AskResult:
         """Возвращает payload в зависимости от выбранного режима."""
 
-        _ = refinement_trace
         if self.mode == "error":
-            raise AskServiceError("SQL_EXECUTION_FAILED", "Не удалось выполнить SQL-запрос.")
+            raise AskServiceError(self.error_code, "Не удалось выполнить SQL-запрос.")
         if self.mode == "clarification":
             return AskResult(
                 question=question,
@@ -123,6 +123,25 @@ class TestAskApiContract(unittest.TestCase):
         self.assertIn("detail", body)
         self.assertEqual(body["detail"]["error_code"], "SQL_EXECUTION_FAILED")
         self.assertIn("message", body["detail"])
+
+    def test_guardrail_error_contract(self) -> None:
+        """Guardrail-ошибки возвращаются как структурированные HTTP 400 ответы."""
+
+        for error_code in (
+            "SQL_COST_LIMIT_EXCEEDED",
+            "SQL_MUTATION_BLOCKED",
+            "SQL_MULTI_STATEMENT_BLOCKED",
+        ):
+            with self.subTest(error_code=error_code):
+                client = self._make_client(
+                    ContractStubAskService(mode="error", error_code=error_code)
+                )
+                response = client.post("/api/ask", json={"question": "Show me everything"})
+
+                self.assertEqual(response.status_code, 400)
+                body = response.json()
+                self.assertEqual(body["detail"]["error_code"], error_code)
+                self.assertIn("message", body["detail"])
 
 
 if __name__ == "__main__":

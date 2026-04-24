@@ -23,15 +23,3 @@ CREATE TABLE IF NOT EXISTS orders (
     price_tender_local FLOAT,
     price_start_local FLOAT
 );
-
--- Readonly user for LLM querying
-CREATE USER readonly_user WITH PASSWORD 'readonly_password';
-GRANT CONNECT ON DATABASE drivee_nl2sql TO readonly_user;
-GRANT USAGE ON SCHEMA public TO readonly_user;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly_user;
-
--- Allow readonly_user to read future tables as well
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO readonly_user;
-
--- Secure Postgres instance: Setup statement timeout against heavy hallucinated queries (15 seconds)
-ALTER ROLE readonly_user SET statement_timeout = '15000';

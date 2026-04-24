@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from fastapi.testclient import TestClient
 
-from backend.scripts.api_server import create_app, get_ask_service
+from backend.app.interfaces.http.server import create_app, get_ask_service
 from backend.app.application.services.ask_service import AskResult, AskServiceError
 
 

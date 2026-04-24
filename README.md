@@ -37,7 +37,10 @@ pip install -r backend/requirements.txt
 Скопируйте `cp backend/.env.example backend/.env`. Обязательные ключи:
 - `OPENAI_API_KEY` (в проекте настроен прокси через OpenRouter, ключ должен быть совместимым).
 - `OPENAI_MODEL` (например, `openrouter/gpt-4o-mini`).
+- `READONLY_DB_PASSWORD` (локальный пароль read-only пользователя PostgreSQL; не коммитьте реальный `.env`).
 - `ENABLE_LLM_INTENT_CLASSIFIER=1` (опционально, для активации LLM-классификатора интентов).
+
+CLI-загрузка данных использует `PGUSER`/`PGPASSWORD`, а runtime-выполнение NL2SQL-запросов использует `READONLY_DB_USER`/`READONLY_DB_PASSWORD`.
 
 ### 3. Запуск инфраструктуры
 Команды выполняются из корня проекта:
@@ -52,6 +55,17 @@ python -m backend.app.interfaces.cli.init_db_cli
 # 3. Векторизуем схему и few-shot примеры для RAG (Vanna.ai)
 python -m backend.app.interfaces.cli.init_vanna_cli
 ```
+
+Если PostgreSQL volume уже создан до настройки `READONLY_DB_PASSWORD`, пересоздайте локальный volume перед повторной инициализацией.
+
+### 3.1. Полная загрузка CSV на сервере
+Для production-загрузки полного `train.csv` используйте chunked loader:
+
+```bash
+python -m backend.app.interfaces.cli.load_orders_cli --csv /opt/drivee/data/train.csv --chunk-size 50000 --truncate
+```
+
+Флаг `--truncate` очищает таблицу `orders` перед загрузкой. Без него строки будут добавляться в существующую таблицу.
 
 ### 4. Точки входа
 - **REST API (FastAPI)**:

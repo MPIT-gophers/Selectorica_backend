@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from fastapi.testclient import TestClient
 
-from backend.scripts.api_server import create_app, get_pilot_kpi_service
+from backend.app.interfaces.http.server import create_app, get_pilot_kpi_service
 from backend.app.application.services.pilot_kpi_service import PilotKpiSnapshot
 
 

@@ -6,10 +6,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-drivee_nl2sql}
+      READONLY_DB_USER: ${READONLY_DB_USER:-readonly_user}
+      READONLY_DB_PASSWORD: ${READONLY_DB_PASSWORD:?READONLY_DB_PASSWORD is required}
     ports:
       - "${PGHOST_PORT:-15432}:5432"
     volumes:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./init-readonly-user.sh:/docker-entrypoint-initdb.d/init-readonly-user.sh
       - pg_data:/var/lib/postgresql/data
     healthcheck:
       test:

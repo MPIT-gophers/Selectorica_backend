@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.app.infrastructure.config.env_config import get_db_config
+from backend.app.infrastructure.config.env_config import get_runtime_db_config
 
 
 _POSTGRES_DIALECT: Final[str] = "postgres"
@@ -119,7 +119,7 @@ def _parse_statements(sql_string: str) -> list[exp.Expression]:
 def _build_engine() -> Engine:
     """Создает SQLAlchemy engine для PostgreSQL из локального env-конфига."""
 
-    db = get_db_config()
+    db = get_runtime_db_config()
     db_url = (
         f"postgresql+psycopg2://{db.user}:{db.password}@{db.host}:{db.port}/{db.database}"
     )

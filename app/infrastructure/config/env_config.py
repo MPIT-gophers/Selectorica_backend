@@ -49,3 +49,18 @@ def get_db_config() -> DbConfig:
         user=user,
         password=password,
     )
+
+
+def get_runtime_db_config() -> DbConfig:
+    """Собирает read-only `DbConfig` для runtime-выполнения NL2SQL-запросов."""
+
+    admin_config = get_db_config()
+    user = os.getenv("READONLY_DB_USER", admin_config.user)
+    password = os.getenv("READONLY_DB_PASSWORD", admin_config.password)
+    return DbConfig(
+        host=admin_config.host,
+        port=admin_config.port,
+        database=admin_config.database,
+        user=user,
+        password=password,
+    )

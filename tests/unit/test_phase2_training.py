@@ -10,7 +10,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TMP_ROOT = REPO_ROOT / ".tmp_test"
 
-from backend.scripts.train_vanna import (
+from backend.app.infrastructure.training.train_vanna_pipeline import (
     AppError,
     RunConfig,
     _resolve_llm_credentials,
