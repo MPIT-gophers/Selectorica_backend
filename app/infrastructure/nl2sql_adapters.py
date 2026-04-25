@@ -7,6 +7,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from backend.app.infrastructure.config.env_config import load_repo_env
 from backend.app.infrastructure.mcp.query_server import execute_safe_query
 from backend.app.infrastructure.training.train_vanna_pipeline import (
     RunConfig,
@@ -45,7 +46,7 @@ class VannaRuntime:
             if self._vn is not None:
                 return self._vn
 
-            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+            model = _resolve_runtime_model()
             trainer = create_trainer(os.getenv("OPENAI_API_KEY", ""), model)
             assets = load_and_validate_assets(_default_run_config())
             train_vanna_assets(trainer, assets, _noop_logger, request_id="req_phase4_boot")
@@ -191,10 +192,27 @@ def _default_run_config() -> RunConfig:
         rules_path=project_root / "training/business_rules.md",
         cube_output_path=project_root / "semantic/cubes/orders_cube.yaml",
         init_sql_path=project_root / "init.sql",
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        model=_resolve_runtime_model(),
         verify_db=False,
         dry_run=False,
     )
+
+
+def _resolve_runtime_model() -> str:
+    """Загружает `.env` и возвращает модель LLM для runtime-запросов Vanna."""
+
+    load_repo_env()
+    raw_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+    return _normalize_openrouter_model_id(raw_model)
+
+
+def _normalize_openrouter_model_id(model: str) -> str:
+    """Снимает ошибочный префикс `openrouter/`, если он попал в `.env`."""
+
+    prefix = "openrouter/"
+    if model.lower().startswith(prefix):
+        return model[len(prefix):]
+    return model
 
 
 def _noop_logger(*_args: Any, **_kwargs: Any) -> None:

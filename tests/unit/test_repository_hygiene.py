@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from backend.app.infrastructure.config.env_config import get_runtime_db_config
 
 
@@ -40,3 +42,42 @@ def test_runtime_db_config_prefers_readonly_credentials() -> None:
 
     assert config.user == "readonly_user"
     assert config.password == "readonly-secret"
+
+
+def test_runtime_db_config_rejects_admin_fallback_by_default() -> None:
+    """Runtime не должен молча переходить на admin-пользователя без readonly env."""
+
+    with patch.dict(
+        "os.environ",
+        {
+            "PGHOST": "127.0.0.1",
+            "PGPORT": "15432",
+            "PGDATABASE": "drivee_nl2sql",
+            "PGUSER": "postgres",
+            "PGPASSWORD": "postgres",
+        },
+        clear=True,
+    ), patch("backend.app.infrastructure.config.env_config.load_repo_env", lambda: None):
+        with pytest.raises(RuntimeError, match="READONLY_DB_USER"):
+            get_runtime_db_config()
+
+
+def test_runtime_db_config_allows_admin_fallback_only_with_dev_flag() -> None:
+    """Явный dev-флаг оставляет локальный аварийный обход видимым в конфиге."""
+
+    with patch.dict(
+        "os.environ",
+        {
+            "PGHOST": "127.0.0.1",
+            "PGPORT": "15432",
+            "PGDATABASE": "drivee_nl2sql",
+            "PGUSER": "postgres",
+            "PGPASSWORD": "postgres",
+            "ALLOW_RUNTIME_DB_ADMIN_FALLBACK": "1",
+        },
+        clear=True,
+    ), patch("backend.app.infrastructure.config.env_config.load_repo_env", lambda: None):
+        config = get_runtime_db_config()
+
+    assert config.user == "postgres"
+    assert config.password == "postgres"

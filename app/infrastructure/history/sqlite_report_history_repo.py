@@ -21,6 +21,9 @@ class ReportRecord:
     explain_text: str = ""
     confidence: dict[str, Any] = None
     recommended_actions: list[str] = None
+    assumptions: list[str] = None
+    resolved_params: dict[str, Any] = None
+    decision_events: list[dict[str, Any]] = None
 
 
 class ReportHistoryRepository:
@@ -46,9 +49,12 @@ class ReportHistoryRepository:
                     refinement_trace_json,
                     explain_text,
                     confidence_json,
-                    recommended_actions_json
+                    recommended_actions_json,
+                    assumptions_json,
+                    resolved_params_json,
+                    decision_events_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.question,
@@ -58,6 +64,9 @@ class ReportHistoryRepository:
                     record.explain_text,
                     json.dumps(record.confidence or {}, ensure_ascii=False),
                     json.dumps(record.recommended_actions or [], ensure_ascii=False),
+                    json.dumps(record.assumptions or [], ensure_ascii=False),
+                    json.dumps(record.resolved_params or {}, ensure_ascii=False),
+                    json.dumps(record.decision_events or [], ensure_ascii=False),
                 ),
             )
             connection.commit()
@@ -75,7 +84,10 @@ class ReportHistoryRepository:
                     refinement_trace_json,
                     explain_text,
                     confidence_json,
-                    recommended_actions_json
+                    recommended_actions_json,
+                    assumptions_json,
+                    resolved_params_json,
+                    decision_events_json
                 FROM reports
                 ORDER BY id DESC
                 LIMIT ?
@@ -92,6 +104,9 @@ class ReportHistoryRepository:
                 explain_text=row[4] or "",
                 confidence=self._parse_confidence(row[5]),
                 recommended_actions=self._parse_recommended_actions(row[6]),
+                assumptions=self._parse_string_list(row[7]),
+                resolved_params=self._parse_dict(row[8]),
+                decision_events=self._parse_event_list(row[9]),
             )
             for row in rows
         ]
@@ -110,7 +125,10 @@ class ReportHistoryRepository:
                     refinement_trace_json TEXT NOT NULL DEFAULT '[]',
                     explain_text TEXT NOT NULL DEFAULT '',
                     confidence_json TEXT NOT NULL DEFAULT '{}',
-                    recommended_actions_json TEXT NOT NULL DEFAULT '[]'
+                    recommended_actions_json TEXT NOT NULL DEFAULT '[]',
+                    assumptions_json TEXT NOT NULL DEFAULT '[]',
+                    resolved_params_json TEXT NOT NULL DEFAULT '{}',
+                    decision_events_json TEXT NOT NULL DEFAULT '[]'
                 )
                 """
             )
@@ -144,6 +162,27 @@ class ReportHistoryRepository:
                     """
                     ALTER TABLE reports
                     ADD COLUMN recommended_actions_json TEXT NOT NULL DEFAULT '[]'
+                    """
+                )
+            if "assumptions_json" not in columns:
+                connection.execute(
+                    """
+                    ALTER TABLE reports
+                    ADD COLUMN assumptions_json TEXT NOT NULL DEFAULT '[]'
+                    """
+                )
+            if "resolved_params_json" not in columns:
+                connection.execute(
+                    """
+                    ALTER TABLE reports
+                    ADD COLUMN resolved_params_json TEXT NOT NULL DEFAULT '{}'
+                    """
+                )
+            if "decision_events_json" not in columns:
+                connection.execute(
+                    """
+                    ALTER TABLE reports
+                    ADD COLUMN decision_events_json TEXT NOT NULL DEFAULT '[]'
                     """
                 )
             connection.commit()
@@ -189,6 +228,11 @@ class ReportHistoryRepository:
     def _parse_recommended_actions(self, raw_value: str | None) -> list[str]:
         """Преобразует JSON-массив action-подсказок в список строк."""
 
+        return self._parse_string_list(raw_value)
+
+    def _parse_string_list(self, raw_value: str | None) -> list[str]:
+        """Преобразует JSON-массив строк в безопасный список строк."""
+
         if not raw_value:
             return []
         try:
@@ -198,3 +242,27 @@ class ReportHistoryRepository:
         if not isinstance(parsed, list):
             return []
         return [str(item) for item in parsed]
+
+    def _parse_dict(self, raw_value: str | None) -> dict[str, Any]:
+        """Преобразует JSON-объект в словарь с безопасным fallback."""
+
+        if not raw_value:
+            return {}
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _parse_event_list(self, raw_value: str | None) -> list[dict[str, Any]]:
+        """Преобразует JSON-массив событий decision engine в список словарей."""
+
+        if not raw_value:
+            return []
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [item for item in parsed if isinstance(item, dict)]

@@ -8,11 +8,14 @@ from decimal import Decimal
 from typing import Any
 
 from fastmcp import FastMCP
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.app.infrastructure.config.env_config import get_runtime_db_config
+from backend.app.infrastructure.config.env_config import (
+    RuntimeDbConfigError,
+    build_runtime_db_engine,
+)
 from backend.app.infrastructure.security.sql_guardrails import (
     GuardrailError,
     check_query_cost,
@@ -62,28 +65,29 @@ def _execute_query(sql_string: str) -> dict[str, Any]:
     try:
         with engine.connect() as connection:
             result = connection.execute(text(sql_string))
-            rows = result.fetchmany(row_limit)
+            rows = result.fetchmany(row_limit + 1)
             columns = list(result.keys())
     finally:
         engine.dispose()
 
-    serialized_rows = [_serialize_row(row._mapping) for row in rows]
+    visible_rows = rows[:row_limit]
+    serialized_rows = [_serialize_row(row._mapping) for row in visible_rows]
     return {
         "columns": columns,
         "rows": serialized_rows,
         "row_count": len(serialized_rows),
         "row_limit": row_limit,
+        "truncated": len(rows) > row_limit,
     }
 
 
 def _build_engine() -> Engine:
     """Создает SQLAlchemy engine для PostgreSQL из локального env-конфига."""
 
-    db = get_runtime_db_config()
-    db_url = (
-        f"postgresql+psycopg2://{db.user}:{db.password}@{db.host}:{db.port}/{db.database}"
-    )
-    return create_engine(db_url, future=True)
+    try:
+        return build_runtime_db_engine()
+    except RuntimeDbConfigError as error:
+        raise GuardrailError("SQL_RUNTIME_CONFIG_INVALID", str(error)) from error
 
 
 def _resolve_row_limit() -> int:

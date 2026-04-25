@@ -20,8 +20,15 @@ def build_rule_clarification_payload(clarification: Any) -> dict[str, Any]:
 
     return {
         "kind": clarification.kind,
+        "param_name": clarification.param_name,
+        "reason_code": clarification.reason_code,
+        "required": clarification.required,
         "reason": clarification.reason,
         "question": clarification.question,
+        "allow_free_input": clarification.allow_free_input,
+        "free_input_placeholder": clarification.free_input_placeholder,
+        "default_value": clarification.default_value,
+        "default_label": clarification.default_label,
         "options": [
             {
                 "label": option.label,
@@ -38,5 +45,15 @@ def build_classifier_clarification_payload(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Возвращает confidence и clarification payload из classifier-результата."""
 
-    return classifier_result["confidence"], classifier_result["clarification"]
-
+    clarification = dict(classifier_result["clarification"])
+    clarification.setdefault("param_name", clarification.get("kind", ""))
+    clarification.setdefault(
+        "reason_code",
+        f"{str(clarification.get('kind', 'intent')).upper()}_AMBIGUOUS",
+    )
+    clarification.setdefault("required", True)
+    clarification.setdefault("allow_free_input", True)
+    clarification.setdefault("free_input_placeholder", "")
+    clarification.setdefault("default_value", None)
+    clarification.setdefault("default_label", "")
+    return classifier_result["confidence"], clarification

@@ -49,6 +49,21 @@ class TestReportHistoryRepository(unittest.TestCase):
             explain_text="cancellations by period",
             confidence={"score": 0.42, "level": "low", "reason": "test-low"},
             recommended_actions=["Finance: review cancellation loss segments."],
+            assumptions=["Период не указан, использую последние 7 дней."],
+            resolved_params={
+                "date_range": {
+                    "value": "last_7_days",
+                    "label": "последние 7 дней",
+                    "source": "default",
+                }
+            },
+            decision_events=[
+                {
+                    "type": "default_applied",
+                    "param_name": "date_range",
+                    "reason_code": "DATE_RANGE_DEFAULTED",
+                }
+            ],
         )
 
         repo.save_report(first)
@@ -61,6 +76,9 @@ class TestReportHistoryRepository(unittest.TestCase):
         self.assertEqual(rows[0].explain_text, "cancellations by period")
         self.assertEqual(rows[0].confidence["level"], "low")
         self.assertIn("Finance", rows[0].recommended_actions[0])
+        self.assertIn("последние 7 дней", rows[0].assumptions[0])
+        self.assertEqual(rows[0].resolved_params["date_range"]["source"], "default")
+        self.assertEqual(rows[0].decision_events[0]["reason_code"], "DATE_RANGE_DEFAULTED")
         self.assertEqual(rows[1].question, first.question)
         self.assertEqual(rows[1].confidence["level"], "high")
 

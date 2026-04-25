@@ -53,7 +53,7 @@ def _is_numeric_field(field: str, rows: list[dict[str, Any]]) -> bool:
     """Проверяет пригодность поля как метрики (ось Y)."""
 
     lowered = field.lower()
-    if "id" in lowered:
+    if _is_identifier_field(lowered) or _is_numeric_dimension_field(lowered):
         return False
 
     sample_values = [row.get(field) for row in rows[:100]]
@@ -85,19 +85,53 @@ def _is_category_field(field: str, rows: list[dict[str, Any]]) -> bool:
     """Проверяет пригодность поля как категориальной оси X."""
 
     lowered = field.lower()
-    if "id" in lowered:
-        return False
-
     values = [row.get(field) for row in rows[:300]]
     non_null = [value for value in values if value is not None]
     if not non_null:
         return False
 
-    if not all(isinstance(value, str) for value in non_null):
-        return False
-
     cardinality = len(set(non_null))
-    return 2 <= cardinality <= 20
+    if all(isinstance(value, str) for value in non_null):
+        return 2 <= cardinality <= 20
+
+    if all(isinstance(value, int) for value in non_null):
+        return 2 <= cardinality <= 30 and (
+            _is_identifier_field(lowered) or _is_numeric_dimension_field(lowered)
+        )
+
+    return False
+
+
+def _is_identifier_field(lowered_field: str) -> bool:
+    """Отличает id-поля от слов, где `id` является частью названия."""
+
+    return (
+        lowered_field == "id"
+        or lowered_field.endswith("_id")
+        or lowered_field.startswith("id_")
+    )
+
+
+def _is_numeric_dimension_field(lowered_field: str) -> bool:
+    """Определяет числовые разрезы, которые лучше ставить на X, а не на Y."""
+
+    dimension_tokens = (
+        "hour",
+        "weekday",
+        "day_of_week",
+        "day",
+        "week",
+        "month",
+        "quarter",
+        "year",
+        "час",
+        "день",
+        "недел",
+        "месяц",
+        "квартал",
+        "год",
+    )
+    return any(token in lowered_field for token in dimension_tokens)
 
 
 def _looks_temporal_question(question: str) -> bool:
@@ -116,4 +150,3 @@ def _looks_temporal_question(question: str) -> bool:
         "time",
     )
     return any(token in q for token in temporal_tokens)
-

@@ -81,12 +81,16 @@ class AskResult:
     columns: list[str] | None = None
     rows: list[dict[str, Any]] | None = None
     row_count: int = 0
+    truncated: bool = False
     report_saved: bool = False
     report_saved_at: str = ""
     visualization: dict[str, Any] | None = None
     confidence: dict[str, Any] | None = None
     clarification: dict[str, Any] | None = None
     recommended_actions: list[str] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+    resolved_params: dict[str, Any] = field(default_factory=dict)
+    decision_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 class AskService:
@@ -107,6 +111,21 @@ class AskService:
         "reject",
     )
     _NON_METRIC_COLUMN_KEYWORDS = ("id", "date", "time", "day", "month", "year")
+    _TEMPORAL_ACTION_KEYWORDS = (
+        "динамик",
+        "тренд",
+        "по дня",
+        "по дат",
+        "по недел",
+        "по месяцам",
+        "day-over-day",
+        "week-over-week",
+    )
+    _TEMPORAL_COLUMN_KEYWORDS = ("date", "time", "timestamp", "day", "week", "month")
+    _SUCCESS_ACTION_FALLBACK = (
+        "Сверьте SQL и explain ниже, затем уточните период или разрез, "
+        "если результат нужен для управленческого решения."
+    )
 
     def __init__(
         self,
@@ -131,6 +150,7 @@ class AskService:
             classify_with_fallback=self._classify_with_fallback,
             normalize_question_terms=self._normalize_question_terms,
             generate_sql_with_retry=self._generate_sql_with_retry,
+            repair_sql_after_execution_error=self._repair_sql_after_execution_error,
             execute_query=self._executor.execute,
             explain_sql=self._sql_explainer.explain,
             build_visualization_spec=self._build_visualization_spec,
@@ -148,10 +168,15 @@ class AskService:
         self,
         question: str,
         refinement_trace: list[dict[str, str]] | None = None,
+        context: dict[str, Any] | None = None,
     ) -> AskResult:
         """Обрабатывает вопрос, выполняет SQL и сохраняет запись отчета."""
 
-        return self._ask_use_case.execute(question, refinement_trace=refinement_trace)
+        return self._ask_use_case.execute(
+            question,
+            refinement_trace=refinement_trace,
+            context=context,
+        )
 
     def _clean_question(self, question: str) -> str:
         """Тримминг и валидация пользовательского вопроса."""
@@ -208,6 +233,9 @@ class AskService:
         explain_text: str,
         confidence: dict[str, Any],
         recommended_actions: list[str],
+        assumptions: list[str],
+        resolved_params: dict[str, Any],
+        decision_events: list[dict[str, Any]],
     ) -> bool:
         """Сохраняет отчет для use case через текущий репозиторий истории."""
 
@@ -220,6 +248,9 @@ class AskService:
                 explain_text=explain_text,
                 confidence=confidence,
                 recommended_actions=recommended_actions,
+                assumptions=assumptions,
+                resolved_params=resolved_params,
+                decision_events=decision_events,
             )
         )
 
@@ -235,11 +266,15 @@ class AskService:
             columns=execution_data.columns,
             rows=execution_data.rows,
             row_count=execution_data.row_count,
+            truncated=execution_data.truncated,
             report_saved=execution_data.report_saved,
             report_saved_at=execution_data.report_saved_at,
             visualization=execution_data.visualization,
             confidence=execution_data.confidence,
             recommended_actions=execution_data.recommended_actions,
+            assumptions=execution_data.assumptions,
+            resolved_params=execution_data.resolved_params,
+            decision_events=execution_data.decision_events,
         )
 
     def _build_recommended_actions(
@@ -247,6 +282,7 @@ class AskService:
         question: str,
         columns: list[str],
         rows: list[dict[str, Any]],
+        context: dict[str, Any] | None = None,
     ) -> list[str]:
         """Строит простые action-подсказки для Finance/Ops по вопросу и фактическому результату."""
 
@@ -254,7 +290,11 @@ class AskService:
         actions: list[str] = []
 
         if any(keyword in normalized_question for keyword in self._FINANCE_KEYWORDS):
-            finance_action = self._build_finance_action(columns=columns, rows=rows)
+            finance_action = self._build_finance_action(
+                question=question,
+                columns=columns,
+                rows=rows,
+            )
             if finance_action:
                 actions.append(finance_action)
 
@@ -263,10 +303,18 @@ class AskService:
             if ops_action:
                 actions.append(ops_action)
 
-        return actions
+        if actions:
+            return actions
+
+        scenario_action = self._get_scenario_action_hint(context or {})
+        if scenario_action:
+            return [scenario_action]
+
+        return [self._SUCCESS_ACTION_FALLBACK]
 
     def _build_finance_action(
         self,
+        question: str,
         columns: list[str],
         rows: list[dict[str, Any]],
     ) -> str | None:
@@ -275,13 +323,39 @@ class AskService:
         metric_column = self._find_primary_metric_column(columns=columns, rows=rows)
         metric_values = self._extract_numeric_values(metric_column, rows) if metric_column else []
 
-        if len(metric_values) >= 2 and metric_values[-1] < metric_values[0]:
+        if (
+            len(metric_values) >= 2
+            and metric_values[-1] < metric_values[0]
+            and self._has_temporal_action_context(question=question, columns=columns)
+        ):
             return f"Finance: проверить причины снижения {metric_column} за выбранный период."
         if not rows:
             return "Finance: проверить период и фильтры, данных по финансовой метрике не найдено."
         if metric_column:
             return f"Finance: сверить отклонения по {metric_column} и вклад ключевых сегментов."
         return None
+
+    def _get_scenario_action_hint(self, context: dict[str, Any]) -> str | None:
+        """Возвращает безопасный next step из контекста готового сценария."""
+
+        raw_action_hint = context.get("action_hint")
+        if not isinstance(raw_action_hint, str):
+            return None
+        action_hint = raw_action_hint.strip()
+        return action_hint or None
+
+    def _has_temporal_action_context(self, question: str, columns: list[str]) -> bool:
+        """Проверяет, можно ли интерпретировать порядок строк как временную динамику."""
+
+        normalized_question = question.lower()
+        if any(keyword in normalized_question for keyword in self._TEMPORAL_ACTION_KEYWORDS):
+            return True
+
+        for column in columns:
+            normalized_column = column.lower()
+            if any(keyword in normalized_column for keyword in self._TEMPORAL_COLUMN_KEYWORDS):
+                return True
+        return False
 
     def _build_ops_action(
         self,
@@ -433,12 +507,40 @@ class AskService:
             if error.error_code != "SQL_GENERATION_FAILED":
                 raise
 
-            repaired_output = self._sql_generator.regenerate_sql(
+            return self._regenerate_and_normalize_sql(
                 question=question,
                 previous_output=first_output,
                 error_message=error.message,
-            )
-            return self._normalize_generated_sql(repaired_output), True
+            ), True
+
+    def _repair_sql_after_execution_error(
+        self,
+        question: str,
+        previous_sql: str,
+        error_message: str,
+    ) -> tuple[str, bool]:
+        """Делает одну repair-генерацию после recoverable ошибки guardrails/execution."""
+
+        return self._regenerate_and_normalize_sql(
+            question=question,
+            previous_output=previous_sql,
+            error_message=error_message,
+        ), True
+
+    def _regenerate_and_normalize_sql(
+        self,
+        question: str,
+        previous_output: str,
+        error_message: str,
+    ) -> str:
+        """Запрашивает repair SQL у генератора и нормализует результат перед повторным запуском."""
+
+        repaired_output = self._sql_generator.regenerate_sql(
+            question=question,
+            previous_output=previous_output,
+            error_message=error_message,
+        )
+        return self._normalize_generated_sql(repaired_output)
 
     def _normalize_generated_sql(self, generated_sql: str) -> str:
         """Нормализует ответ LLM до исполнимого read-only SQL или поднимает доменную ошибку."""
@@ -523,10 +625,17 @@ class AskService:
         self,
         used_retry: bool,
         visualization: dict[str, Any],
+        intent_confidence: float = 0.9,
+        assumptions: list[str] | None = None,
     ) -> dict[str, Any]:
         """Строит простой confidence score для UI и explainability."""
 
-        return build_confidence_payload(used_retry=used_retry, visualization=visualization)
+        return build_confidence_payload(
+            used_retry=used_retry,
+            visualization=visualization,
+            intent_confidence=intent_confidence,
+            assumptions=assumptions or [],
+        )
 
 
 def utc_now_iso() -> str:

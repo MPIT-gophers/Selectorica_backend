@@ -35,6 +35,9 @@ class TestSQLGuardrails(unittest.TestCase):
             "UPDATE orders SET status = 'ok'",
             "DELETE FROM orders",
             "DROP TABLE orders",
+            "ALTER TABLE orders ADD COLUMN unsafe_flag INT",
+            "TRUNCATE orders",
+            "GRANT SELECT ON orders TO public",
         )
 
         for query in mutation_queries:
@@ -56,6 +59,13 @@ class TestSQLGuardrails(unittest.TestCase):
         with self.assertRaises(GuardrailError) as ctx:
             validate_ast("SELECT FROM")
         self.assertEqual(ctx.exception.error_code, "SQL_PARSE_ERROR")
+
+    def test_validate_ast_blocks_sleep_function(self) -> None:
+        """Resource-abuse функции должны блокироваться до EXPLAIN/исполнения."""
+
+        with self.assertRaises(GuardrailError) as ctx:
+            validate_ast("SELECT pg_sleep(20)")
+        self.assertEqual(ctx.exception.error_code, "SQL_FUNCTION_BLOCKED")
 
 
 if __name__ == "__main__":

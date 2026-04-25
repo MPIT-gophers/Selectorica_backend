@@ -8,7 +8,19 @@ dimensions:
     description: Канал в MVP представлен полем статуса тендера.
     type: string
     sql: "${table}.status_tender"
+  - name: tender_status
+    description: Статус тендера; используйте для вопросов про decline/accept и отклонения водителями.
+    type: string
+    sql: "${table}.status_tender"
+  - name: order_status
+    description: Статус заказа; используйте для сравнения отмененных и завершенных поездок.
+    type: string
+    sql: "${table}.status_order"
   - name: order_date
     description: Дата заказа с дневной гранулярностью.
     type: time
     sql: "date_trunc('day', ${table}.order_timestamp)"
+  - name: order_hour
+    description: Час создания заказа для внутридневной операционной аналитики.
+    type: number
+    sql: "EXTRACT(HOUR FROM ${table}.order_timestamp)"

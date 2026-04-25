@@ -98,3 +98,65 @@ pairs:
       ORDER BY 2 DESC
       LIMIT 10;
     notes: "Топ городов по выручке."
+
+  - id: fs_009
+    question_ru: "Где в city_id=67 чаще всего водители отклоняют тендеры, если смотреть по часу заказа?"
+    sql: |
+      SELECT
+          EXTRACT(HOUR FROM order_timestamp)::int AS order_hour,
+          COUNT(*) FILTER (WHERE status_tender = 'decline') AS declined_tenders,
+          COUNT(*) AS total_tenders,
+          ROUND(
+              COUNT(*) FILTER (WHERE status_tender = 'decline')::numeric / NULLIF(COUNT(*), 0),
+              4
+          ) AS decline_rate
+      FROM orders
+      WHERE city_id = 67
+      GROUP BY 1
+      ORDER BY decline_rate DESC, declined_tenders DESC;
+    notes: "Demo Ops: доля и количество decline по часу заказа."
+
+  - id: fs_010
+    question_ru: "Как меняется время от создания заказа до принятия водителем по city_id=67?"
+    sql: |
+      SELECT
+          date_trunc('day', order_timestamp) AS order_date,
+          AVG(EXTRACT(EPOCH FROM (driveraccept_timestamp - order_timestamp))) AS avg_accept_time_seconds
+      FROM orders
+      WHERE city_id = 67
+        AND driveraccept_timestamp IS NOT NULL
+        AND order_timestamp IS NOT NULL
+      GROUP BY 1
+      ORDER BY 1;
+    notes: "Demo Ops: среднее время принятия заказа водителем."
+
+  - id: fs_011
+    question_ru: "В какие часы поездки по city_id=67 имеют самое большое время выполнения и дистанцию?"
+    sql: |
+      SELECT
+          EXTRACT(HOUR FROM order_timestamp)::int AS order_hour,
+          AVG(duration_in_seconds) AS avg_duration_seconds,
+          AVG(distance_in_meters) AS avg_distance_meters
+      FROM orders
+      WHERE city_id = 67
+        AND status_order = 'done'
+        AND duration_in_seconds IS NOT NULL
+        AND distance_in_meters IS NOT NULL
+      GROUP BY 1
+      ORDER BY avg_duration_seconds DESC, avg_distance_meters DESC;
+    notes: "Demo Ops: длительность и дистанция успешных поездок по часу."
+
+  - id: fs_012
+    question_ru: "Есть ли разница между price_start_local, price_tender_local и price_order_local по успешным заказам?"
+    sql: |
+      SELECT
+          AVG(price_start_local) FILTER (WHERE price_start_local IS NOT NULL) AS avg_price_start_local,
+          AVG(price_tender_local) FILTER (WHERE price_tender_local IS NOT NULL) AS avg_price_tender_local,
+          AVG(price_order_local) FILTER (WHERE price_order_local IS NOT NULL) AS avg_order_value_local,
+          AVG(price_order_local - price_start_local) FILTER (
+              WHERE price_order_local IS NOT NULL AND price_start_local IS NOT NULL
+          ) AS avg_order_vs_start_delta_local
+      FROM orders
+      WHERE city_id = 67
+        AND status_order = 'done';
+    notes: "Demo Finance: сравнение стартовой, тендерной и финальной цены."

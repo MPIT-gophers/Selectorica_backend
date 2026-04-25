@@ -92,6 +92,22 @@ class StubExecutor:
         return self.payload
 
 
+class SequencedExecutor:
+    """Заглушка исполнителя, которая возвращает payload-ответы по очереди."""
+
+    def __init__(self, payloads: list[dict[str, Any]]) -> None:
+        """Сохраняет сценарий ответов и историю SQL для проверки retry-flow."""
+
+        self.payloads = list(payloads)
+        self.sql_history: list[str] = []
+
+    def execute(self, sql_text: str) -> dict[str, Any]:
+        """Запоминает SQL и возвращает следующий подготовленный payload."""
+
+        self.sql_history.append(sql_text)
+        return self.payloads.pop(0)
+
+
 class StubHistoryRepo:
     """Заглушка репозитория истории отчетов."""
 
@@ -170,6 +186,77 @@ class TestPhase4Service(unittest.TestCase):
         )
         self.assertEqual(result.generated_sql, executor.last_sql)
 
+    def test_retry_is_used_when_executor_returns_recoverable_sql_error(self) -> None:
+        """Recoverable SQL-ошибка после guardrails/execution должна запускать одну repair-попытку."""
+
+        executor = SequencedExecutor(
+            [
+                {
+                    "status": "error",
+                    "error_code": "SQL_PARSE_ERROR",
+                    "message": "Некорректный SQL.",
+                },
+                {
+                    "status": "ok",
+                    "estimated_total_cost": 1.0,
+                    "columns": ["value"],
+                    "rows": [{"value": 1}],
+                    "row_count": 1,
+                },
+            ]
+        )
+        generator = StubSqlGenerator(
+            sql_text="SELECT broken",
+            regenerated_sql_text="SELECT 1 AS value;",
+        )
+        service = AskService(
+            sql_generator=generator,
+            sql_explainer=StubSqlExplainer(),
+            executor=executor,
+            history_repo=StubHistoryRepo(),
+        )
+
+        result = service.ask("Покажи выручку за текущий месяц")
+
+        self.assertEqual(result.status, "ok")
+        self.assertTrue(generator.regenerate_called)
+        self.assertEqual(executor.sql_history, ["SELECT broken", "SELECT 1 AS value;"])
+        self.assertEqual(result.generated_sql, "SELECT 1 AS value;")
+        self.assertEqual(result.confidence["level"], "medium")
+
+    def test_safety_sql_errors_do_not_trigger_retry(self) -> None:
+        """Safety/cost guardrails должны возвращаться пользователю без repair-попытки."""
+
+        for error_code in (
+            "SQL_MUTATION_BLOCKED",
+            "SQL_MULTI_STATEMENT_BLOCKED",
+            "SQL_COST_LIMIT_EXCEEDED",
+        ):
+            with self.subTest(error_code=error_code):
+                executor = SequencedExecutor(
+                    [
+                        {
+                            "status": "error",
+                            "error_code": error_code,
+                            "message": "Запрос остановлен guardrails.",
+                        }
+                    ]
+                )
+                generator = StubSqlGenerator(sql_text="SELECT risky FROM orders;")
+                service = AskService(
+                    sql_generator=generator,
+                    sql_explainer=StubSqlExplainer(),
+                    executor=executor,
+                    history_repo=StubHistoryRepo(),
+                )
+
+                with self.assertRaises(AskServiceError) as context:
+                    service.ask("Покажи выручку за текущий месяц")
+
+                self.assertEqual(context.exception.error_code, error_code)
+                self.assertFalse(generator.regenerate_called)
+                self.assertEqual(executor.sql_history, ["SELECT risky FROM orders;"])
+
     def test_region_term_is_normalized_to_city_id(self) -> None:
         """Термин `регион` в вопросе должен быть нормализован к `city_id` перед генерацией."""
 
@@ -237,7 +324,8 @@ class TestPhase4Service(unittest.TestCase):
         result = service.ask("Покажи список статусов за текущий месяц")
 
         self.assertEqual(result.visualization["type"], "table_only")
-        self.assertLessEqual(result.confidence["score"], 0.8)
+        self.assertEqual(result.confidence["score"], 0.9)
+        self.assertIn("Визуализация", result.confidence["reason"])
 
     def test_ask_returns_metric_clarification_before_sql_generation(self) -> None:
         """Неоднозначные продажи должны остановить flow до Vanna и SQL."""
@@ -335,6 +423,85 @@ class TestPhase4Service(unittest.TestCase):
             ['Ops: проверить причины роста статуса "decline" и очередь обработки.'],
         )
 
+    def test_scenario_action_hint_is_used_when_no_specific_action_exists(self) -> None:
+        """Если сигналов в данных нет, action layer должен брать действие из scenario context."""
+
+        executor = StubExecutor()
+        executor.payload = {
+            "status": "ok",
+            "estimated_total_cost": 1.0,
+            "columns": ["city_id"],
+            "rows": [{"city_id": 67}],
+            "row_count": 1,
+        }
+        service = AskService(
+            sql_generator=StubSqlGenerator("SELECT city_id FROM orders LIMIT 1;"),
+            sql_explainer=StubSqlExplainer(),
+            executor=executor,
+            history_repo=StubHistoryRepo(),
+        )
+
+        result = service.ask(
+            "Покажи список городов за текущий месяц",
+            context={"action_hint": "Проверить проблемные часы и покрытие смен."},
+        )
+
+        self.assertEqual(
+            result.recommended_actions,
+            ["Проверить проблемные часы и покрытие смен."],
+        )
+
+    def test_success_without_signals_still_gets_safe_action_fallback(self) -> None:
+        """Успешный ответ без role/scenario сигналов не должен оставаться без next step."""
+
+        service = AskService(
+            sql_generator=StubSqlGenerator("SELECT 1 AS value;"),
+            sql_explainer=StubSqlExplainer(),
+            executor=StubExecutor(),
+            history_repo=StubHistoryRepo(),
+        )
+
+        result = service.ask("Покажи данные за текущий месяц")
+
+        self.assertEqual(
+            result.recommended_actions,
+            [
+                (
+                    "Сверьте SQL и explain ниже, затем уточните период или разрез, "
+                    "если результат нужен для управленческого решения."
+                )
+            ],
+        )
+
+    def test_finance_drop_action_requires_temporal_context(self) -> None:
+        """Finance action не должен называть снижением обычную сортировку не по времени."""
+
+        executor = StubExecutor()
+        executor.payload = {
+            "status": "ok",
+            "estimated_total_cost": 1.0,
+            "columns": ["city_id", "revenue_local"],
+            "rows": [
+                {"city_id": 67, "revenue_local": 120.0},
+                {"city_id": 21, "revenue_local": 80.0},
+            ],
+            "row_count": 2,
+        }
+        service = AskService(
+            sql_generator=StubSqlGenerator("SELECT city_id, revenue_local FROM orders;"),
+            sql_explainer=StubSqlExplainer(),
+            executor=executor,
+            history_repo=StubHistoryRepo(),
+        )
+
+        result = service.ask("Покажи выручку по городам за текущий месяц")
+
+        self.assertNotIn("снижения", result.recommended_actions[0])
+        self.assertEqual(
+            result.recommended_actions,
+            ["Finance: сверить отклонения по revenue_local и вклад ключевых сегментов."],
+        )
+
     def test_successful_report_saves_refinement_trace(self) -> None:
         """Сервис должен сохранять refinement trace вместе с итоговым отчетом."""
 
@@ -367,7 +534,7 @@ class TestPhase4Service(unittest.TestCase):
         self.assertIsInstance(history_repo.last_record.recommended_actions, list)
 
     def test_refinement_trace_prevents_repeated_clarification_loop(self) -> None:
-        """После выбора пользователя сервис идет в SQL-flow, а не задает новый вопрос."""
+        """После выбора метрики сервис применяет дефолт периода и идет в SQL-flow."""
 
         generator = StubSqlGenerator(sql_text="SELECT 1;")
         executor = StubExecutor()
@@ -406,7 +573,55 @@ class TestPhase4Service(unittest.TestCase):
 
         self.assertEqual(result.status, "ok")
         self.assertFalse(classifier.called)
+        self.assertIn("последние 7 дней", generator.last_question)
+        self.assertEqual(result.resolved_params["date_range"]["source"], "default")
+        self.assertIn("последние 7 дней", result.assumptions[0])
         self.assertEqual(executor.last_sql, "SELECT 1;")
+
+    def test_missing_period_is_defaulted_before_sql_generation(self) -> None:
+        """Ясный вопрос без периода должен получить безопасный период без карточки уточнения."""
+
+        generator = StubSqlGenerator(sql_text="SELECT 1;")
+        service = AskService(
+            sql_generator=generator,
+            sql_explainer=StubSqlExplainer(),
+            executor=StubExecutor(),
+            history_repo=StubHistoryRepo(),
+        )
+
+        result = service.ask("Покажи выручку по регионам")
+
+        self.assertEqual(result.status, "ok")
+        self.assertIn("последние 7 дней", generator.last_question)
+        self.assertEqual(result.resolved_params["date_range"]["value"], "last_7_days")
+        self.assertEqual(result.decision_events[0]["reason_code"], "DATE_RANGE_DEFAULTED")
+
+    def test_missing_period_uses_context_before_default_in_service(self) -> None:
+        """Сервис должен передавать контекст периода в resolver перед SQL-flow."""
+
+        generator = StubSqlGenerator(sql_text="SELECT 1;")
+        service = AskService(
+            sql_generator=generator,
+            sql_explainer=StubSqlExplainer(),
+            executor=StubExecutor(),
+            history_repo=StubHistoryRepo(),
+        )
+
+        result = service.ask(
+            "Покажи отмены по регионам",
+            context={
+                "previous_params": {
+                    "date_range": {
+                        "value": "last_30_days",
+                        "label": "последние 30 дней",
+                    }
+                }
+            },
+        )
+
+        self.assertEqual(result.status, "ok")
+        self.assertIn("последние 30 дней", generator.last_question)
+        self.assertEqual(result.resolved_params["date_range"]["source"], "context")
 
     def test_classifier_can_request_clarification_for_non_rule_ambiguity(self) -> None:
         """LLM-classifier должен уметь вернуть уточнение, если deterministic rules промолчали."""

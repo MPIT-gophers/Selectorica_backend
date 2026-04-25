@@ -11,10 +11,24 @@ cubes:
     description: Канал в MVP представлен полем статуса тендера.
     type: string
     sql: ${table}.status_tender
+  - name: tender_status
+    description: Статус тендера; используйте для вопросов про decline/accept и отклонения
+      водителями.
+    type: string
+    sql: ${table}.status_tender
+  - name: order_status
+    description: Статус заказа; используйте для сравнения отмененных и завершенных
+      поездок.
+    type: string
+    sql: ${table}.status_order
   - name: order_date
     description: Дата заказа с дневной гранулярностью.
     type: time
     sql: date_trunc('day', ${table}.order_timestamp)
+  - name: order_hour
+    description: Час создания заказа для внутридневной операционной аналитики.
+    type: number
+    sql: EXTRACT(HOUR FROM ${table}.order_timestamp)
   metrics:
   - name: revenue_local
     description: Суммарная выручка по завершенным заказам в локальной валюте.
@@ -26,3 +40,23 @@ cubes:
   - name: completed_trips
     description: Количество завершенных поездок.
     sql: COUNT(*) FILTER (WHERE ${table}.status_order = 'done')
+  - name: declined_tenders
+    description: Количество отклоненных тендеров водителями.
+    sql: COUNT(*) FILTER (WHERE ${table}.status_tender = 'decline')
+  - name: avg_order_value_local
+    description: Средний чек по завершенным заказам в локальной валюте.
+    sql: AVG(CASE WHEN ${table}.status_order = 'done' THEN ${table}.price_order_local
+      END)
+  - name: avg_accept_time_seconds
+    description: Среднее время от создания заказа до принятия водителем в секундах.
+    sql: AVG(EXTRACT(EPOCH FROM (${table}.driveraccept_timestamp - ${table}.order_timestamp)))
+      FILTER (WHERE ${table}.driveraccept_timestamp IS NOT NULL AND ${table}.order_timestamp
+      IS NOT NULL)
+  - name: avg_duration_seconds
+    description: Средняя длительность успешной поездки в секундах.
+    sql: AVG(${table}.duration_in_seconds) FILTER (WHERE ${table}.status_order = 'done'
+      AND ${table}.duration_in_seconds IS NOT NULL)
+  - name: avg_distance_meters
+    description: Средняя дистанция успешной поездки в метрах.
+    sql: AVG(${table}.distance_in_meters) FILTER (WHERE ${table}.status_order = 'done'
+      AND ${table}.distance_in_meters IS NOT NULL)

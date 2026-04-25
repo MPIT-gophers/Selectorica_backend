@@ -17,16 +17,23 @@ class StubAskService:
 
     should_fail: bool = False
     should_clarify: bool = False
+    should_raise_unexpected: bool = False
     last_refinement_trace: list[dict[str, str]] | None = None
+    last_context: dict[str, object] | None = None
 
     def ask(
         self,
         question: str,
         refinement_trace: list[dict[str, str]] | None = None,
+        context: dict[str, object] | None = None,
     ) -> AskResult:
         """Возвращает предсказуемый результат или доменную ошибку."""
 
         self.last_refinement_trace = refinement_trace
+        self.last_context = context
+
+        if self.should_raise_unexpected:
+            raise RuntimeError("internal connection password=secret")
 
         if self.should_clarify:
             return AskResult(
@@ -39,8 +46,15 @@ class StubAskService:
                 },
                 clarification={
                     "kind": "period",
+                    "param_name": "date_range",
+                    "reason_code": "DATE_RANGE_REQUIRED",
+                    "required": True,
                     "reason": "В запросе не указан период.",
                     "question": "За какой период показать данные?",
+                    "allow_free_input": True,
+                    "free_input_placeholder": "Например: последние 14 дней",
+                    "default_value": "last_7_days",
+                    "default_label": "последние 7 дней",
                     "options": [
                         {
                             "label": "7 дней",
@@ -76,6 +90,21 @@ class StubAskService:
                 "reason": "Тестовый график.",
                 "confidence": 1.0,
             },
+            assumptions=["Период не указан, использую последние 7 дней."],
+            resolved_params={
+                "date_range": {
+                    "value": "last_7_days",
+                    "label": "последние 7 дней",
+                    "source": "default",
+                }
+            },
+            decision_events=[
+                {
+                    "type": "default_applied",
+                    "param_name": "date_range",
+                    "reason_code": "DATE_RANGE_DEFAULTED",
+                }
+            ],
         )
 
 
@@ -98,6 +127,9 @@ class TestPhase4Api(unittest.TestCase):
         self.assertEqual(body["row_count"], 1)
         self.assertEqual(body["confidence"]["level"], "high")
         self.assertEqual(body["visualization"]["type"], "bar")
+        self.assertEqual(body["resolved_params"]["date_range"]["source"], "default")
+        self.assertIn("последние 7 дней", body["assumptions"][0])
+        self.assertEqual(body["decision_events"][0]["reason_code"], "DATE_RANGE_DEFAULTED")
 
     def test_ask_endpoint_domain_error(self) -> None:
         """Доменная ошибка сервиса должна маппиться в HTTP 400."""
@@ -111,6 +143,23 @@ class TestPhase4Api(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         body = response.json()
         self.assertEqual(body["detail"]["error_code"], "SQL_COST_LIMIT_EXCEEDED")
+
+    def test_ask_endpoint_unexpected_error_hides_internal_details(self) -> None:
+        """Непредвиденная ошибка API не должна отдавать repr внутреннего исключения."""
+
+        app = create_app()
+        app.dependency_overrides[get_ask_service] = lambda: StubAskService(
+            should_raise_unexpected=True
+        )
+        client = TestClient(app)
+
+        response = client.post("/api/ask", json={"question": "Покажи тестовые данные"})
+
+        self.assertEqual(response.status_code, 500)
+        body = response.json()
+        self.assertEqual(body["detail"]["error_code"], "UNEXPECTED_ERROR")
+        self.assertIn("Непредвиденная ошибка", body["detail"]["message"])
+        self.assertNotIn("password=secret", body["detail"]["message"])
 
     def test_ask_endpoint_requires_question_field(self) -> None:
         """Отсутствие `question` должно приводить к валидационной ошибке FastAPI."""
@@ -137,6 +186,10 @@ class TestPhase4Api(unittest.TestCase):
         self.assertEqual(body["status"], "clarification_needed")
         self.assertEqual(body["confidence"]["level"], "low")
         self.assertEqual(body["clarification"]["kind"], "period")
+        self.assertEqual(body["clarification"]["param_name"], "date_range")
+        self.assertEqual(body["clarification"]["reason_code"], "DATE_RANGE_REQUIRED")
+        self.assertTrue(body["clarification"]["allow_free_input"])
+        self.assertEqual(body["clarification"]["default_value"], "last_7_days")
         self.assertEqual(body["clarification"]["options"][0]["label"], "7 дней")
 
     def test_ask_endpoint_passes_refinement_trace(self) -> None:
@@ -163,6 +216,36 @@ class TestPhase4Api(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(stub.last_refinement_trace[0]["selected_label"], "Выручка")
+
+    def test_ask_endpoint_passes_analysis_context(self) -> None:
+        """API должен передавать контекст периода и сценария в сервисный слой."""
+
+        stub = StubAskService()
+        app = create_app()
+        app.dependency_overrides[get_ask_service] = lambda: stub
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/ask",
+            json={
+                "question": "Покажи выручку",
+                "context": {
+                    "previous_params": {
+                        "date_range": {
+                            "value": "last_30_days",
+                            "label": "последние 30 дней",
+                        }
+                    },
+                    "scenario_id": "FIN-01",
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            stub.last_context["previous_params"]["date_range"]["value"],
+            "last_30_days",
+        )
 
 
 if __name__ == "__main__":

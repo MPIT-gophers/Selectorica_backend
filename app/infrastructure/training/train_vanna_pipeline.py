@@ -28,10 +28,10 @@ from backend.app.infrastructure.config.env_config import get_db_config, load_rep
 
 REQUIRED_METRICS = {"revenue_local", "cancelled_orders", "completed_trips"}
 REQUIRED_DIMENSIONS = {"city_id", "channel", "order_date"}
-EXPECTED_FEW_SHOT_COUNT = 8
+MIN_FEW_SHOT_COUNT = 8
 SQL_TABLE_PLACEHOLDER = "${table}"
 SQL_VALIDATION_TABLE = "orders"
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class AppError(Exception):
@@ -236,10 +236,10 @@ def validate_dimensions(dimensions: List[Dict[str, Any]]) -> None:
 def validate_few_shot_pairs(pairs: List[Dict[str, Any]]) -> None:
     """Валидирует few-shot примеры для обучения Vanna."""
 
-    if len(pairs) != EXPECTED_FEW_SHOT_COUNT:
+    if len(pairs) < MIN_FEW_SHOT_COUNT:
         raise AppError(
             "INVALID_FEWSHOT_COUNT",
-            f"Ожидалось {EXPECTED_FEW_SHOT_COUNT} пар, получено {len(pairs)}.",
+            f"Ожидалось минимум {MIN_FEW_SHOT_COUNT} пар, получено {len(pairs)}.",
         )
 
     seen_ids = set()

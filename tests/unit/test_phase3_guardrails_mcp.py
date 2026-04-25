@@ -12,7 +12,7 @@ from backend.app.infrastructure.security.sql_guardrails import GuardrailError, c
 class TestQueryCostGuardrails(unittest.TestCase):
     """Проверяет ограничения стоимости SQL-запроса через EXPLAIN JSON."""
 
-    @patch("backend.app.infrastructure.security.sql_guardrails.create_engine")
+    @patch("backend.app.infrastructure.config.env_config.create_engine")
     def test_check_query_cost_success(self, create_engine_mock: MagicMock) -> None:
         """Функция должна извлекать Total Cost и возвращать его как float."""
 
@@ -27,9 +27,10 @@ class TestQueryCostGuardrails(unittest.TestCase):
         result = check_query_cost("SELECT 1", max_total_cost=100.0)
 
         self.assertEqual(result, 42.5)
+        self.assertIn("statement_timeout=15000", str(create_engine_mock.call_args))
         self.assertIn("EXPLAIN (FORMAT JSON)", str(connection.execute.call_args[0][0]))
 
-    @patch("backend.app.infrastructure.security.sql_guardrails.create_engine")
+    @patch("backend.app.infrastructure.config.env_config.create_engine")
     def test_check_query_cost_blocks_expensive_query(
         self, create_engine_mock: MagicMock
     ) -> None:
@@ -47,7 +48,7 @@ class TestQueryCostGuardrails(unittest.TestCase):
             check_query_cost("SELECT 1", max_total_cost=100.0)
         self.assertEqual(ctx.exception.error_code, "SQL_COST_LIMIT_EXCEEDED")
 
-    @patch("backend.app.infrastructure.security.sql_guardrails.create_engine")
+    @patch("backend.app.infrastructure.config.env_config.create_engine")
     def test_check_query_cost_invalid_explain_payload(
         self, create_engine_mock: MagicMock
     ) -> None:
@@ -67,7 +68,7 @@ class TestQueryCostGuardrails(unittest.TestCase):
 class TestSafeQueryTool(unittest.TestCase):
     """Проверяет MCP tool execute_safe_query в happy-path и fail-path."""
 
-    @patch("backend.app.infrastructure.mcp.query_server.create_engine")
+    @patch("backend.app.infrastructure.config.env_config.create_engine")
     @patch("backend.app.infrastructure.mcp.query_server.check_query_cost")
     @patch("backend.app.infrastructure.mcp.query_server.validate_ast")
     def test_execute_safe_query_success(
@@ -95,11 +96,51 @@ class TestSafeQueryTool(unittest.TestCase):
         create_engine_mock.return_value = engine
 
         payload = execute_safe_query("select 1")
+        self.assertIn("statement_timeout=15000", str(create_engine_mock.call_args))
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["normalized_sql"], "SELECT 1 AS value")
         self.assertEqual(payload["estimated_total_cost"], 12.0)
         self.assertEqual(payload["row_count"], 1)
         self.assertEqual(payload["rows"][0]["value"], 1)
+        self.assertFalse(payload["truncated"])
+
+    @patch.dict("os.environ", {"SQL_RESULT_MAX_ROWS": "1"})
+    @patch("backend.app.infrastructure.config.env_config.create_engine")
+    @patch("backend.app.infrastructure.mcp.query_server.check_query_cost")
+    @patch("backend.app.infrastructure.mcp.query_server.validate_ast")
+    def test_execute_safe_query_marks_truncated_result(
+        self,
+        validate_ast_mock: MagicMock,
+        check_query_cost_mock: MagicMock,
+        create_engine_mock: MagicMock,
+    ) -> None:
+        """Tool должен явно помечать результат, если строк больше лимита ответа."""
+
+        validate_ast_mock.return_value = "SELECT value FROM orders"
+        check_query_cost_mock.return_value = 12.0
+
+        first_row = MagicMock()
+        first_row._mapping = {"value": 1}
+        overflow_row = MagicMock()
+        overflow_row._mapping = {"value": 2}
+
+        result = MagicMock()
+        result.fetchmany.return_value = [first_row, overflow_row]
+        result.keys.return_value = ["value"]
+
+        connection = MagicMock()
+        connection.execute.return_value = result
+
+        engine = MagicMock()
+        engine.connect.return_value.__enter__.return_value = connection
+        create_engine_mock.return_value = engine
+
+        payload = execute_safe_query("select value from orders")
+
+        result.fetchmany.assert_called_once_with(2)
+        self.assertEqual(payload["row_count"], 1)
+        self.assertEqual(payload["rows"], [{"value": 1}])
+        self.assertTrue(payload["truncated"])
 
     @patch("backend.app.infrastructure.mcp.query_server.validate_ast")
     def test_execute_safe_query_returns_guardrail_error(

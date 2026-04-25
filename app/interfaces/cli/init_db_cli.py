@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
 import pandas as pd
 from sqlalchemy import create_engine
 
 from backend.app.infrastructure.config.env_config import get_db_config
+
+
+def get_default_csv_path() -> Path:
+    """Возвращает путь к `train.csv` в корне проекта."""
+
+    return Path(__file__).resolve().parents[4] / "train.csv"
 
 
 def load_data() -> None:
@@ -25,7 +31,7 @@ def load_data() -> None:
     )
     engine = create_engine(db_url)
 
-    csv_path = os.path.join(os.path.dirname(__file__), "..", "train.csv")
+    csv_path = get_default_csv_path()
     print("Loading first 10,000 rows from train.csv...")
     df = pd.read_csv(csv_path, nrows=10000)
 

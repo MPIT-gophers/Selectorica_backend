@@ -8,11 +8,14 @@ from typing import Final, Type
 
 import sqlglot
 from sqlglot import exp
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.app.infrastructure.config.env_config import get_runtime_db_config
+from backend.app.infrastructure.config.env_config import (
+    RuntimeDbConfigError,
+    build_runtime_db_engine,
+)
 
 
 _POSTGRES_DIALECT: Final[str] = "postgres"
@@ -22,7 +25,11 @@ _MUTATION_EXPRESSIONS: Final[tuple[Type[exp.Expression], ...]] = (
     exp.Update,
     exp.Delete,
     exp.Drop,
+    exp.Alter,
+    exp.TruncateTable,
+    exp.Grant,
 )
+_BLOCKED_FUNCTION_NAMES: Final[frozenset[str]] = frozenset({"pg_sleep"})
 
 
 class GuardrailError(Exception):
@@ -57,7 +64,10 @@ def validate_ast(sql_string: str) -> str:
     if isinstance(statement, _MUTATION_EXPRESSIONS):
         raise GuardrailError(
             "SQL_MUTATION_BLOCKED",
-            "Обнаружена мутационная операция (INSERT/UPDATE/DELETE/DROP).",
+            (
+                "Обнаружена мутационная операция "
+                "(INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/GRANT)."
+            ),
         )
 
     if not isinstance(statement, exp.Select):
@@ -69,7 +79,17 @@ def validate_ast(sql_string: str) -> str:
     if statement.find(*_MUTATION_EXPRESSIONS):
         raise GuardrailError(
             "SQL_MUTATION_BLOCKED",
-            "Обнаружена мутационная операция (INSERT/UPDATE/DELETE/DROP).",
+            (
+                "Обнаружена мутационная операция "
+                "(INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/GRANT)."
+            ),
+        )
+
+    blocked_function = _find_blocked_function(statement)
+    if blocked_function is not None:
+        raise GuardrailError(
+            "SQL_FUNCTION_BLOCKED",
+            f"Функция {blocked_function} запрещена в аналитических read-only запросах.",
         )
 
     return statement.sql(dialect=_POSTGRES_DIALECT)
@@ -119,11 +139,20 @@ def _parse_statements(sql_string: str) -> list[exp.Expression]:
 def _build_engine() -> Engine:
     """Создает SQLAlchemy engine для PostgreSQL из локального env-конфига."""
 
-    db = get_runtime_db_config()
-    db_url = (
-        f"postgresql+psycopg2://{db.user}:{db.password}@{db.host}:{db.port}/{db.database}"
-    )
-    return create_engine(db_url, future=True)
+    try:
+        return build_runtime_db_engine()
+    except RuntimeDbConfigError as error:
+        raise GuardrailError("SQL_RUNTIME_CONFIG_INVALID", str(error)) from error
+
+
+def _find_blocked_function(statement: exp.Expression) -> str | None:
+    """Находит запрещенную SQL-функцию, которая расходует ресурсы без пользы."""
+
+    for function in statement.find_all(exp.Anonymous):
+        function_name = function.name.lower()
+        if function_name in _BLOCKED_FUNCTION_NAMES:
+            return function_name
+    return None
 
 
 def _resolve_max_total_cost() -> float:

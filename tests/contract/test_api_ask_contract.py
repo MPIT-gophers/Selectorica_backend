@@ -22,6 +22,7 @@ class ContractStubAskService:
         self,
         question: str,
         refinement_trace: list[dict[str, str]] | None = None,
+        context: dict[str, object] | None = None,
     ) -> AskResult:
         """Возвращает payload в зависимости от выбранного режима."""
 
@@ -131,6 +132,10 @@ class TestAskApiContract(unittest.TestCase):
             "SQL_COST_LIMIT_EXCEEDED",
             "SQL_MUTATION_BLOCKED",
             "SQL_MULTI_STATEMENT_BLOCKED",
+            "SQL_NOT_READ_ONLY",
+            "SQL_FUNCTION_BLOCKED",
+            "SQL_EXPLAIN_FAILED",
+            "SQL_EXECUTION_FAILED",
         ):
             with self.subTest(error_code=error_code):
                 client = self._make_client(
@@ -142,6 +147,18 @@ class TestAskApiContract(unittest.TestCase):
                 body = response.json()
                 self.assertEqual(body["detail"]["error_code"], error_code)
                 self.assertIn("message", body["detail"])
+                self.assertIsInstance(body["detail"]["recommended_actions"], list)
+                self.assertGreater(len(body["detail"]["recommended_actions"]), 0)
+                self.assertTrue(
+                    all(
+                        isinstance(action, str) and action
+                        for action in body["detail"]["recommended_actions"]
+                    )
+                )
+                self.assertNotEqual(
+                    body["detail"]["recommended_actions"][0],
+                    "Попробуйте переформулировать вопрос короче и конкретнее.",
+                )
 
 
 if __name__ == "__main__":

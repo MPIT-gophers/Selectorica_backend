@@ -15,6 +15,10 @@ class AskRequest(BaseModel):
         default_factory=list,
         description="Цепочка выбранных пользователем уточнений перед финальным запросом.",
     )
+    context: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Контекст анализа: ранее разрешенные параметры, сценарий и безопасные дефолты.",
+    )
 
 
 class AskResponse(BaseModel):
@@ -30,9 +34,16 @@ class AskResponse(BaseModel):
     columns: list[str]
     rows: list[dict[str, Any]]
     row_count: int
+    truncated: bool = Field(
+        default=False,
+        description="Признак, что backend вернул только первые row_limit строк результата.",
+    )
     report_saved: bool
     report_saved_at: str
     visualization: dict[str, Any] | None = None
+    assumptions: list[str] = Field(default_factory=list)
+    resolved_params: dict[str, Any] = Field(default_factory=dict)
+    decision_events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ClarificationOptionResponse(BaseModel):
@@ -50,6 +61,13 @@ class ClarificationPayloadResponse(BaseModel):
     reason: str
     question: str
     options: list[ClarificationOptionResponse]
+    param_name: str = ""
+    reason_code: str = ""
+    required: bool = True
+    allow_free_input: bool = True
+    free_input_placeholder: str = ""
+    default_value: str | None = None
+    default_label: str = ""
 
 
 class ClarificationResponse(BaseModel):
@@ -59,6 +77,9 @@ class ClarificationResponse(BaseModel):
     question: str
     confidence: dict[str, Any]
     clarification: ClarificationPayloadResponse
+    assumptions: list[str] = Field(default_factory=list)
+    resolved_params: dict[str, Any] = Field(default_factory=dict)
+    decision_events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PilotKpiResponse(BaseModel):
@@ -101,4 +122,3 @@ class PilotKpiResponse(BaseModel):
         default="",
         description="Вопрос из самой свежей сохраненной записи или пустая строка, если history пуста.",
     )
-

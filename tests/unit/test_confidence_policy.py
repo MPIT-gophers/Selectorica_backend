@@ -22,12 +22,29 @@ class TestConfidencePolicy(unittest.TestCase):
         self.assertEqual(payload["score"], 0.9)
         self.assertIn("достаточно", payload["reason"])
 
-    def test_medium_confidence_stays_between_thresholds(self) -> None:
-        """Scores in the middle bucket should be labeled as medium."""
+    def test_visualization_confidence_does_not_lower_clear_answer_confidence(self) -> None:
+        """Низкая уверенность графика не должна сама снижать доверие к SQL-ответу."""
 
         payload = build_confidence_payload(
             used_retry=False,
-            visualization={"confidence": 0.79},
+            visualization={
+                "type": "table_only",
+                "reason": "Недостаточно надежных полей для корректной визуализации.",
+                "confidence": 0.7,
+            },
+        )
+
+        self.assertEqual(payload["level"], "high")
+        self.assertEqual(payload["score"], 0.9)
+        self.assertIn("Визуализация", payload["reason"])
+
+    def test_medium_confidence_stays_between_thresholds(self) -> None:
+        """Intent confidence in the middle bucket should be labeled as medium."""
+
+        payload = build_confidence_payload(
+            used_retry=False,
+            visualization={"confidence": 0.95},
+            intent_confidence=0.79,
         )
 
         self.assertEqual(payload["level"], "medium")
@@ -38,7 +55,8 @@ class TestConfidencePolicy(unittest.TestCase):
 
         payload = build_confidence_payload(
             used_retry=False,
-            visualization={"confidence": 0.8},
+            visualization={"confidence": 0.95},
+            intent_confidence=0.8,
         )
 
         self.assertEqual(payload["level"], "high")
@@ -49,7 +67,8 @@ class TestConfidencePolicy(unittest.TestCase):
 
         payload = build_confidence_payload(
             used_retry=False,
-            visualization={"confidence": 0.6},
+            visualization={"confidence": 0.95},
+            intent_confidence=0.6,
         )
 
         self.assertEqual(payload["level"], "medium")
@@ -60,7 +79,8 @@ class TestConfidencePolicy(unittest.TestCase):
 
         payload = build_confidence_payload(
             used_retry=False,
-            visualization={"confidence": 0.59},
+            visualization={"confidence": 0.95},
+            intent_confidence=0.59,
         )
 
         self.assertEqual(payload["level"], "low")
@@ -93,12 +113,28 @@ class TestConfidencePolicy(unittest.TestCase):
         self.assertEqual(with_retry["score"], 0.75)
         self.assertGreater(without_retry["score"], with_retry["score"])
 
+    def test_reason_mentions_retry_and_assumptions(self) -> None:
+        """Причина должна объяснять retry и примененные предположения."""
+
+        payload = build_confidence_payload(
+            used_retry=True,
+            visualization={"confidence": 0.95},
+            intent_confidence=0.75,
+            assumptions=["Период не указан, использую безопасный дефолт: последние 7 дней."],
+        )
+
+        self.assertEqual(payload["level"], "low")
+        self.assertEqual(payload["score"], 0.55)
+        self.assertIn("SQL потребовал повторную генерацию", payload["reason"])
+        self.assertIn("Период не указан", payload["reason"])
+
     def test_score_is_clamped_to_minimum(self) -> None:
         """Very low visualization confidence must not drop below the minimum clamp."""
 
         payload = build_confidence_payload(
             used_retry=True,
-            visualization={"confidence": 0.1},
+            visualization={"confidence": 0.95},
+            intent_confidence=0.1,
         )
 
         self.assertEqual(payload["level"], "low")

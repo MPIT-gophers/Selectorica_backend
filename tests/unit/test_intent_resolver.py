@@ -28,18 +28,37 @@ class TestIntentResolver(unittest.TestCase):
             ["Выручка", "Поездки", "Средний чек"],
         )
 
-    def test_missing_period_needs_period_clarification(self) -> None:
-        """Аналитический запрос без периода должен уточнять временной диапазон."""
+    def test_missing_period_uses_safe_default_without_clarification(self) -> None:
+        """Аналитический запрос без периода должен использовать безопасный дефолт."""
 
         result = self.resolver.resolve("Покажи выручку по городам")
 
-        self.assertTrue(result.needs_clarification)
-        self.assertEqual(result.clarification.kind, "period")
-        self.assertEqual(result.clarification.question, "За какой период показать данные?")
-        self.assertEqual(
-            [option.label for option in result.clarification.options],
-            ["7 дней", "30 дней", "Текущий месяц"],
+        self.assertFalse(result.needs_clarification)
+        self.assertIsNone(result.clarification)
+        self.assertEqual(result.resolved_params["date_range"]["value"], "last_7_days")
+        self.assertEqual(result.resolved_params["date_range"]["source"], "default")
+        self.assertIn("за последние 7 дней", result.effective_question)
+        self.assertIn("последние 7 дней", result.assumptions[0])
+
+    def test_missing_period_uses_context_before_default(self) -> None:
+        """Если период есть в контексте, resolver должен использовать его вместо дефолта."""
+
+        result = self.resolver.resolve(
+            "Покажи отмены по городам",
+            context={
+                "previous_params": {
+                    "date_range": {
+                        "value": "last_30_days",
+                        "label": "последние 30 дней",
+                    }
+                }
+            },
         )
+
+        self.assertFalse(result.needs_clarification)
+        self.assertEqual(result.resolved_params["date_range"]["source"], "context")
+        self.assertIn("за последние 30 дней", result.effective_question)
+        self.assertIn("из предыдущего запроса", result.assumptions[0])
 
     def test_metric_ambiguity_has_priority_over_missing_period(self) -> None:
         """Если не хватает и метрики, и периода, первым уточняется смысл метрики."""
@@ -48,6 +67,9 @@ class TestIntentResolver(unittest.TestCase):
 
         self.assertTrue(result.needs_clarification)
         self.assertEqual(result.clarification.kind, "metric")
+        self.assertEqual(result.clarification.param_name, "metric")
+        self.assertEqual(result.clarification.reason_code, "METRIC_AMBIGUOUS")
+        self.assertTrue(result.clarification.allow_free_input)
 
     def test_clear_question_does_not_need_clarification(self) -> None:
         """Запрос с метрикой и периодом должен идти в обычный SQL-flow."""

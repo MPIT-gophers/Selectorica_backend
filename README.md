@@ -10,7 +10,7 @@
 * **`app/application/`** (Прикладной слой): Сценарии использования (Use Cases). Например, `AskQuestionUseCase`, который оркестрирует процесс: получение запроса → разрешение неоднозначностей (Intent Resolution) → генерация SQL → валидация → выполнение.
 * **`app/infrastructure/`** (Инфраструктурный слой): Реализации адаптеров:
   * **NL2SQL Адаптеры (`nl2sql_adapters.py`)**: Абстракция над **Vanna.ai**. Включает паттерны Lazy Initialization для загрузки RAG-контекста в память, механизмы Regenerate при синтаксических ошибках SQL, генерацию человекочитаемых Explain-блоков и LLM-классификатор неоднозначностей (Intent Classifier).
-  * **Безопасность (`security/sql_guardrails.py`)**: AST-парсер на базе `sqlglot`. Анализирует сгенерированный SQL до его исполнения, жестко блокирует мутирующие запросы (DML/DDL: DROP, UPDATE, INSERT) и валидирует скоуп (ограничение доступа только к разрешенным таблицам, например `orders`).
+  * **Безопасность (`security/sql_guardrails.py`)**: AST-парсер на базе `sqlglot`. Анализирует сгенерированный SQL до его исполнения, жестко блокирует мутирующие запросы (DML/DDL: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, GRANT), multi-statement и отдельные resource-abuse функции.
   * **MCP-интеграция (`mcp/query_server.py`)**: Реализация сервера Model Context Protocol (через FastMCP) для экспорта аналитических инструментов во внешние AI-агенты (интроспекция схемы, безопасное выполнение запросов).
   * **Обучение (`training/`)**: Пайплайны векторизации DDL, документации (dotML) и few-shot примеров для RAG-составляющей.
 * **`app/interfaces/`** (Транспортный слой):
@@ -38,9 +38,11 @@ pip install -r backend/requirements.txt
 - `OPENAI_API_KEY` (в проекте настроен прокси через OpenRouter, ключ должен быть совместимым).
 - `OPENAI_MODEL` (например, `openrouter/gpt-4o-mini`).
 - `READONLY_DB_PASSWORD` (локальный пароль read-only пользователя PostgreSQL; не коммитьте реальный `.env`).
+- `SQL_STATEMENT_TIMEOUT_MS` (лимит времени каждого runtime SQL-запроса, по умолчанию `15000`).
+- `SQL_MAX_TOTAL_COST` и `SQL_RESULT_MAX_ROWS` (лимит estimated cost и количества строк ответа).
 - `ENABLE_LLM_INTENT_CLASSIFIER=1` (опционально, для активации LLM-классификатора интентов).
 
-CLI-загрузка данных использует `PGUSER`/`PGPASSWORD`, а runtime-выполнение NL2SQL-запросов использует `READONLY_DB_USER`/`READONLY_DB_PASSWORD`.
+CLI-загрузка данных использует `PGUSER`/`PGPASSWORD`, а runtime-выполнение NL2SQL-запросов использует `READONLY_DB_USER`/`READONLY_DB_PASSWORD`. Если read-only credentials отсутствуют, runtime падает fail-closed. Для локальной отладки без read-only пользователя можно явно включить `ALLOW_RUNTIME_DB_ADMIN_FALLBACK=1`.
 
 ### 3. Запуск инфраструктуры
 Команды выполняются из корня проекта:
