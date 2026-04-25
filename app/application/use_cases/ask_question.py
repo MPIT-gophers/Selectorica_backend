@@ -132,7 +132,7 @@ class AskQuestionUseCase:
             )
 
         # LLM-classifier оставляем только для первого шага и только когда deterministic
-        # resolver не применил дефолты/контекст: так мы не возвращаем пользователя в лишние циклы.
+        # resolver не применил контекст: так мы не возвращаем пользователя в лишние циклы.
         if not trace and not intent_resolution.decision_events:
             classifier_result = self._classify_with_fallback(cleaned_question)
             if classifier_result is not None:

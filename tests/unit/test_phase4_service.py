@@ -519,7 +519,7 @@ class TestPhase4Service(unittest.TestCase):
                 {
                     "question": "Что считать продажами?",
                     "selected_label": "Выручка",
-                    "selected_value": "Покажи выручку по регионам",
+                    "selected_value": "Покажи выручку по регионам за текущий месяц",
                 }
             ],
         )
@@ -533,8 +533,8 @@ class TestPhase4Service(unittest.TestCase):
         self.assertIn("level", history_repo.last_record.confidence)
         self.assertIsInstance(history_repo.last_record.recommended_actions, list)
 
-    def test_refinement_trace_prevents_repeated_clarification_loop(self) -> None:
-        """После выбора метрики сервис применяет дефолт периода и идет в SQL-flow."""
+    def test_refinement_trace_prevents_repeated_metric_clarification_loop(self) -> None:
+        """После выбора метрики сервис не должен повторно вызывать classifier."""
 
         generator = StubSqlGenerator(sql_text="SELECT 1;")
         executor = StubExecutor()
@@ -569,17 +569,24 @@ class TestPhase4Service(unittest.TestCase):
                     "selected_value": "Покажи выручку по регионам",
                 }
             ],
+            context={
+                "previous_params": {
+                    "date_range": {
+                        "value": "last_30_days",
+                        "label": "последние 30 дней",
+                    }
+                }
+            },
         )
 
         self.assertEqual(result.status, "ok")
         self.assertFalse(classifier.called)
-        self.assertIn("последние 7 дней", generator.last_question)
-        self.assertEqual(result.resolved_params["date_range"]["source"], "default")
-        self.assertIn("последние 7 дней", result.assumptions[0])
+        self.assertIn("последние 30 дней", generator.last_question)
+        self.assertEqual(result.resolved_params["date_range"]["source"], "context")
         self.assertEqual(executor.last_sql, "SELECT 1;")
 
-    def test_missing_period_is_defaulted_before_sql_generation(self) -> None:
-        """Ясный вопрос без периода должен получить безопасный период без карточки уточнения."""
+    def test_missing_period_returns_period_clarification_before_sql_generation(self) -> None:
+        """Ясный вопрос без периода должен вернуть уточнение вместо дефолта."""
 
         generator = StubSqlGenerator(sql_text="SELECT 1;")
         service = AskService(
@@ -591,10 +598,10 @@ class TestPhase4Service(unittest.TestCase):
 
         result = service.ask("Покажи выручку по регионам")
 
-        self.assertEqual(result.status, "ok")
-        self.assertIn("последние 7 дней", generator.last_question)
-        self.assertEqual(result.resolved_params["date_range"]["value"], "last_7_days")
-        self.assertEqual(result.decision_events[0]["reason_code"], "DATE_RANGE_DEFAULTED")
+        self.assertEqual(result.status, "clarification_needed")
+        self.assertEqual(result.clarification["kind"], "period")
+        self.assertEqual(result.clarification["reason_code"], "DATE_RANGE_REQUIRED")
+        self.assertEqual(generator.last_question, "")
 
     def test_missing_period_uses_context_before_default_in_service(self) -> None:
         """Сервис должен передавать контекст периода в resolver перед SQL-flow."""

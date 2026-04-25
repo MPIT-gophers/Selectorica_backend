@@ -17,19 +17,6 @@ class ClarificationOption:
 
 
 @dataclass(frozen=True)
-class ParameterSpec:
-    """Описание параметра аналитического запроса и политики его уточнения."""
-
-    name: str
-    required: bool
-    default: str | None = None
-    default_label: str = ""
-    can_infer_from_context: bool = True
-    clarify_if_missing: bool = False
-    allow_free_input: bool = True
-
-
-@dataclass(frozen=True)
 class Clarification:
     """Payload уточнения, возвращаемый вместо генерации SQL."""
 
@@ -61,18 +48,6 @@ class IntentResolution:
 
 class IntentResolver:
     """Проверяет вопрос на неоднозначность метрики и периода."""
-
-    _PARAMETER_SPECS = {
-        "date_range": ParameterSpec(
-            name="date_range",
-            required=False,
-            default="last_7_days",
-            default_label="последние 7 дней",
-            can_infer_from_context=True,
-            clarify_if_missing=False,
-            allow_free_input=True,
-        )
-    }
 
     _ANALYTIC_TOKENS = (
         "покажи",
@@ -139,13 +114,6 @@ class IntentResolver:
             )
 
         if self._is_analytic_question(normalized) and not self._has_period(normalized):
-            if self._requires_explicit_period(normalized):
-                return IntentResolution(
-                    True,
-                    self._build_period_clarification(question),
-                    effective_question=question.strip(),
-                    intent_confidence=0.4,
-                )
             return self._resolve_missing_period(question, context or {})
 
         return IntentResolution(
@@ -197,7 +165,7 @@ class IntentResolver:
         question: str,
         context: dict[str, Any],
     ) -> IntentResolution:
-        """Разрешает отсутствующий период через контекст или безопасный дефолт."""
+        """Разрешает отсутствующий период через контекст или карточку уточнения."""
 
         context_period = self._extract_context_period(context)
         if context_period:
@@ -228,36 +196,17 @@ class IntentResolver:
                 intent_confidence=0.8,
             )
 
-        spec = self._PARAMETER_SPECS["date_range"]
-        phrase = self._date_range_phrase(value=spec.default or "", label=spec.default_label)
         return IntentResolution(
-            needs_clarification=False,
-            effective_question=self._append_period(question, phrase),
-            resolved_params={
-                "date_range": {
-                    "value": spec.default,
-                    "label": spec.default_label,
-                    "source": "default",
-                }
-            },
-            assumptions=[
-                f"Период не указан, использую безопасный дефолт: {spec.default_label}."
-            ],
-            decision_events=[
-                {
-                    "type": "default_applied",
-                    "param_name": "date_range",
-                    "reason_code": "DATE_RANGE_DEFAULTED",
-                    "value": spec.default,
-                }
-            ],
-            intent_confidence=0.75,
+            needs_clarification=True,
+            clarification=self._build_period_clarification(question),
+            effective_question=question.strip(),
+            intent_confidence=0.4,
         )
 
     def _extract_context_period(self, context: dict[str, Any]) -> dict[str, str] | None:
         """Достает период из предыдущего или сценарного контекста запроса."""
 
-        for section_name in ("previous_params", "default_params"):
+        for section_name in ("previous_params",):
             section = context.get(section_name)
             if not isinstance(section, dict):
                 continue
@@ -367,8 +316,8 @@ class IntentResolver:
             required=True,
             allow_free_input=True,
             free_input_placeholder="Например: последние 14 дней или с 1 по 7 апреля",
-            default_value="last_7_days",
-            default_label="последние 7 дней",
+            default_value=None,
+            default_label="",
             options=[
                 ClarificationOption(
                     "7 дней",

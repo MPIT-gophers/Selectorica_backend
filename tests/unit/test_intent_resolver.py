@@ -28,20 +28,19 @@ class TestIntentResolver(unittest.TestCase):
             ["Выручка", "Поездки", "Средний чек"],
         )
 
-    def test_missing_period_uses_safe_default_without_clarification(self) -> None:
-        """Аналитический запрос без периода должен использовать безопасный дефолт."""
+    def test_missing_period_requires_period_clarification(self) -> None:
+        """Аналитический запрос без периода должен вернуть карточку уточнения периода."""
 
         result = self.resolver.resolve("Покажи выручку по городам")
 
-        self.assertFalse(result.needs_clarification)
-        self.assertIsNone(result.clarification)
-        self.assertEqual(result.resolved_params["date_range"]["value"], "last_7_days")
-        self.assertEqual(result.resolved_params["date_range"]["source"], "default")
-        self.assertIn("за последние 7 дней", result.effective_question)
-        self.assertIn("последние 7 дней", result.assumptions[0])
+        self.assertTrue(result.needs_clarification)
+        self.assertEqual(result.clarification.kind, "period")
+        self.assertEqual(result.clarification.param_name, "date_range")
+        self.assertEqual(result.clarification.reason_code, "DATE_RANGE_REQUIRED")
+        self.assertEqual(result.effective_question, "Покажи выручку по городам")
 
-    def test_missing_period_uses_context_before_default(self) -> None:
-        """Если период есть в контексте, resolver должен использовать его вместо дефолта."""
+    def test_missing_period_uses_context_before_clarification(self) -> None:
+        """Если период есть в контексте, resolver должен использовать его без уточнения."""
 
         result = self.resolver.resolve(
             "Покажи отмены по городам",
